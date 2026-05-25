@@ -1,0 +1,148 @@
+"""
+霧観測データ整理スクリプト（Google Colab用）
+--------------------------------------
+処理内容：
+  - 「全箇所特になし」の1行を 4:00〜19:00 の16行に展開し、観測値はすべてNaN
+  - 「自己の体調不良で観測できず」の1行も同様に16行に展開し、観測値はすべてNaN
+  - 日付列（A列）の空白を前日の日付で補完（forward fill）
+  - 不要な列（Unnamed列・凡例列）を除去
+  - 結果をCSVとしてダウンロード
+
+使い方：
+  Google Colabでセルごとに上から順番に実行してください。
+"""
+
+# ============================================================
+# セル1：ライブラリの読み込み
+# ============================================================
+import datetime
+import pandas as pd
+from google.colab import files
+
+# ============================================================
+# セル2：Excelファイルのアップロード
+# ============================================================
+print("📂 アップロードするファイルを選択してください...")
+uploaded = files.upload()
+INPUT_FILE = list(uploaded.keys())[0]
+print(f"✅ アップロード完了: {INPUT_FILE}")
+
+# ============================================================
+# セル3：設定
+# ============================================================
+OUTPUT_FILE = "fixed_fog_data.csv"
+
+# 1日の観測時刻（4:00 〜 19:00）
+HOURS = list(range(4, 20))
+
+# 時刻列の特殊値
+LABEL_NOTHING = "全箇所特になし"
+LABEL_SICK    = "自己の体調不良で観測できず"
+
+# ============================================================
+# セル4：各処理の関数定義
+# ============================================================
+def load_data(path: str) -> pd.DataFrame:
+    """Excelファイルを読み込み、不要列を除去して返す。"""
+    df = pd.read_excel(path)
+
+    # Unnamed列と先頭が数字の列（凡例列）を除去
+    keep = [c for c in df.columns
+            if not str(c).startswith("Unnamed") and not str(c)[0].isdigit()]
+    df = df[keep].copy()
+
+    # 日付列を前方補完（各グループの最初の行にしか日付がないため）
+    df["日付"] = df["日付"].ffill()
+
+    return df
+
+
+def get_obs_cols(df: pd.DataFrame) -> list:
+    """観測地点列名のリストを返す（日付・時刻列を除く）。"""
+    return [c for c in df.columns if c not in ("日付", "時刻")]
+
+
+def expand_row(row: pd.Series, obs_cols: list) -> list:
+    """
+    特殊行（全箇所特になし / 体調不良）を
+    4:00〜19:00 の16行に展開する。
+    観測値はすべて NaN（欠損値として機械学習側で扱う）。
+    """
+    expanded = []
+    for hour in HOURS:
+        new_row = row.copy()
+        new_row["時刻"] = datetime.time(hour, 0)  # datetime.time 型で統一
+        for col in obs_cols:
+            new_row[col] = float("nan")
+        expanded.append(new_row)
+    return expanded
+
+
+def fix_fog_data(df: pd.DataFrame) -> pd.DataFrame:
+    """メインの整形処理。"""
+    obs_cols = get_obs_cols(df)
+    result   = []
+    skipped  = 0
+
+    for _, row in df.iterrows():
+        jikoku = str(row["時刻"])
+
+        if jikoku == LABEL_NOTHING:
+            result.extend(expand_row(row, obs_cols))
+
+        elif jikoku == LABEL_SICK:
+            result.extend(expand_row(row, obs_cols))
+
+        elif jikoku == "nan":
+            # 完全な空行はスキップ
+            skipped += 1
+
+        else:
+            # 通常行（datetime.time オブジェクト）
+            result.append(row)
+
+    print(f"空行スキップ数  : {skipped}")
+    return pd.DataFrame(result)
+
+
+def validate(df: pd.DataFrame) -> None:
+    """1日あたりの行数が揃っているか確認して報告する。"""
+    counts   = df.groupby("日付").size()
+    expected = len(HOURS)  # 16
+
+    ok_days  = (counts == expected).sum()
+    bad_days = counts[counts != expected]
+
+    print(f"\n── 検証結果 ──────────────────────")
+    print(f"総行数         : {len(df)}")
+    print(f"総日数         : {len(counts)}")
+    print(f"正常日数 ({expected}行): {ok_days}")
+
+    if bad_days.empty:
+        print("✅ 全日付で行数が揃っています。")
+    else:
+        print(f"⚠️  行数が {expected} でない日付:")
+        print(bad_days.to_string())
+
+print("✅ 関数の定義が完了しました。")
+
+# ============================================================
+# セル5：データ整形の実行
+# ============================================================
+print(f"読み込み中: {INPUT_FILE}")
+df = load_data(INPUT_FILE)
+print(f"元データ行数   : {len(df)}")
+
+print("整形処理中...")
+fixed_df = fix_fog_data(df)
+
+validate(fixed_df)
+
+# ============================================================
+# セル6：CSVとして保存してダウンロード
+# ============================================================
+fixed_df.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
+print(f"✅ 保存完了: {OUTPUT_FILE}")
+
+print("📥 ダウンロードを開始します...")
+files.download(OUTPUT_FILE)
