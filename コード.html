@@ -54,6 +54,9 @@ def load_data(path: str) -> pd.DataFrame:
     # 日付列を前方補完（各グループの最初の行にしか日付がないため）
     df["日付"] = df["日付"].ffill()
 
+    # Excelのシリアル値（数字）を「YYYY/MM/DD」形式の文字列に変換
+    df["日付"] = pd.to_datetime(df["日付"], origin="1899-12-30", unit="D").dt.strftime("%Y/%m/%d")
+
     return df
 
 
