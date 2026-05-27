@@ -1,14 +1,10 @@
-# ver.1.0
-
 """
-霧観測データ整理スクリプト（Google Colab用）
+霧観測データ整理スクリプト（Google Colab用・複数ファイル対応版）
 --------------------------------------
 処理内容：
-  - 「全箇所特になし」の1行を 4:00〜19:00 の16行に展開し、観測値はすべてNaN
-  - 「自己の体調不良で観測できず」の1行も同様に16行に展開し、観測値はすべてNaN
-  - 日付列（A列）の空白を前日の日付で補完（forward fill）
-  - 不要な列（Unnamed列・凡例列）を除去
-  - 結果をCSVとしてダウンロード
+  - 複数のExcelファイルを一括アップロード
+  - 各ファイルに対して整形処理を実行
+  - 整形後のデータを時系列順に結合して1つのCSVとして出力
 
 使い方：
   Google Colabでセルごとに上から順番に実行してください。
@@ -22,17 +18,19 @@ import pandas as pd
 from google.colab import files
 
 # ============================================================
-# セル2：Excelファイルのアップロード
+# セル2：Excelファイルのアップロード（複数選択可）
 # ============================================================
-print("📂 アップロードするファイルを選択してください...")
+print("📂 アップロードするファイルを選択してください（複数選択可）...")
 uploaded = files.upload()
-INPUT_FILE = list(uploaded.keys())[0]
-print(f"✅ アップロード完了: {INPUT_FILE}")
+INPUT_FILES = list(uploaded.keys())
+print(f"✅ アップロード完了: {len(INPUT_FILES)} ファイル")
+for f in INPUT_FILES:
+    print(f"  - {f}")
 
 # ============================================================
 # セル3：設定
 # ============================================================
-OUTPUT_FILE = "fixed_fog_data.csv"
+OUTPUT_FILE = "fixed_fog_data_all.csv"
 
 # 1日の観測時刻（4:00 〜 19:00）
 HOURS = list(range(4, 20))
@@ -76,7 +74,7 @@ def expand_row(row: pd.Series, obs_cols: list) -> list:
     expanded = []
     for hour in HOURS:
         new_row = row.copy()
-        new_row["時刻"] = datetime.time(hour, 0)  # datetime.time 型で統一
+        new_row["時刻"] = datetime.time(hour, 0)
         for col in obs_cols:
             new_row[col] = float("nan")
         expanded.append(new_row)
@@ -94,31 +92,26 @@ def fix_fog_data(df: pd.DataFrame) -> pd.DataFrame:
 
         if jikoku == LABEL_NOTHING:
             result.extend(expand_row(row, obs_cols))
-
         elif jikoku == LABEL_SICK:
             result.extend(expand_row(row, obs_cols))
-
         elif jikoku == "nan":
-            # 完全な空行はスキップ
             skipped += 1
-
         else:
-            # 通常行（datetime.time オブジェクト）
             result.append(row)
 
-    print(f"空行スキップ数  : {skipped}")
+    print(f"  空行スキップ数: {skipped}")
     return pd.DataFrame(result)
 
 
 def validate(df: pd.DataFrame) -> None:
     """1日あたりの行数が揃っているか確認して報告する。"""
     counts   = df.groupby("日付").size()
-    expected = len(HOURS)  # 16
+    expected = len(HOURS)
 
     ok_days  = (counts == expected).sum()
     bad_days = counts[counts != expected]
 
-    print(f"\n── 検証結果 ──────────────────────")
+    print(f"\n── 最終検証結果 ──────────────────────")
     print(f"総行数         : {len(df)}")
     print(f"総日数         : {len(counts)}")
     print(f"正常日数 ({expected}行): {ok_days}")
@@ -132,22 +125,30 @@ def validate(df: pd.DataFrame) -> None:
 print("✅ 関数の定義が完了しました。")
 
 # ============================================================
-# セル5：データ整形の実行
+# セル5：全ファイルの整形・結合
 # ============================================================
-print(f"読み込み中: {INPUT_FILE}")
-df = load_data(INPUT_FILE)
-print(f"元データ行数   : {len(df)}")
+all_dfs = []
 
-print("整形処理中...")
-fixed_df = fix_fog_data(df)
+for filename in INPUT_FILES:
+    print(f"\n読み込み中: {filename}")
+    df = load_data(filename)
+    print(f"  元データ行数: {len(df)}")
+    fixed = fix_fog_data(df)
+    print(f"  整形後行数  : {len(fixed)}")
+    all_dfs.append(fixed)
 
-validate(fixed_df)
+# 時系列順に結合（日付列でソート）
+print("\n結合・並べ替え中...")
+combined_df = pd.concat(all_dfs, ignore_index=True)
+combined_df = combined_df.sort_values(by=["日付", "時刻"]).reset_index(drop=True)
+
+validate(combined_df)
 
 # ============================================================
 # セル6：CSVとして保存してダウンロード
 # ============================================================
-fixed_df.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
-print(f"✅ 保存完了: {OUTPUT_FILE}")
+combined_df.to_csv(OUTPUT_FILE, index=False, encoding="utf-8-sig")
+print(f"\n✅ 保存完了: {OUTPUT_FILE}")
 
 print("📥 ダウンロードを開始します...")
 files.download(OUTPUT_FILE)
